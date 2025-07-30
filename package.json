@@ -1,0 +1,65 @@
+{
+  "name": "dbs-support-desk",
+  "version": "1.0.0",
+  "description": "DBS Support Desk Widget",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "build:installer": "electron-builder --windows nsis",
+    "build:portable": "electron-builder --windows portable",
+    "publish": "electron-builder -p always"
+  },
+  "build": {
+    "appId": "com.dbs.supportdesk",
+    "productName": "DBS Support Desk",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "icon": "assets/DBS_Logo.png",
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "dbsdeskza",
+        "repo": "dbs-support-desk",
+        "private": false
+      }
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-github-username/dbs-support-desk.git"
+  },
+  "keywords": [
+    "support",
+    "widget",
+    "dbs"
+  ],
+  "author": "DBS Technology",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "electron-dl": "^3.5.0",
+    "electron-log": "^5.1.0",
+    "electron-updater": "^6.1.7",
+    "nodemailer": "^6.9.13",
+    "systeminformation": "^5.22.7"
+  },
+  "devDependencies": {
+    "electron": "^29.1.4",
+    "electron-builder": "^26.0.12"
+  }
+}
