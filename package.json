@@ -1,6 +1,6 @@
 {
   "name": "dbs-support-desk",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "DBS Support Desk Widget",
   "main": "main.js",
   "scripts": {
