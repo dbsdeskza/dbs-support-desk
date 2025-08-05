@@ -423,105 +423,306 @@ function showTicketConfirmation() {
     });
 }
 
-// Modify ticket submission handler
+// Update status element
+const updateStatus = document.getElementById('update-status');
 
-// Auto-update UI elements and handlers
-let updateAvailable = false;
-let updateInfo = null;
-let updateDownloading = false;
-
-// Create update notification element
-const updateNotification = document.createElement('div');
-updateNotification.id = 'update-notification';
-updateNotification.style.display = 'none';
-updateNotification.style.position = 'fixed';
-updateNotification.style.bottom = '20px';
-updateNotification.style.right = '20px';
-updateNotification.style.backgroundColor = '#2c3e50';
-updateNotification.style.color = 'white';
-updateNotification.style.padding = '15px';
-updateNotification.style.borderRadius = '5px';
-updateNotification.style.zIndex = '1000';
-updateNotification.style.boxShadow = '0 4px 8px rgba(0,0,0,0.2)';
-updateNotification.style.maxWidth = '300px';
-
-document.body.appendChild(updateNotification);
-
-// Handle update available
-ipcRenderer.on('update-available', (event, info) => {
-  updateAvailable = true;
-  updateInfo = info;
-  
-  updateNotification.innerHTML = `
-    <h3 style="margin: 0 0 10px 0; color: #3498db;">Update Available!</h3>
-    <p style="margin: 0 0 10px 0;">Version ${info.version} is available. Would you like to download and install it now?</p>
-    <button id="download-update" style="background: #3498db; color: white; border: none; padding: 5px 10px; border-radius: 3px; margin-right: 5px; cursor: pointer;">Download Update</button>
-    <button id="remind-later" style="background: #7f8c8d; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer;">Remind Me Later</button>
-  `;
-  
-  updateNotification.style.display = 'block';
-  
-  document.getElementById('download-update').addEventListener('click', () => {
-    ipcRenderer.send('download-update');
-    updateDownloading = true;
-    updateNotification.innerHTML = `
-      <h3 style="margin: 0 0 10px 0; color: #3498db;">Downloading Update...</h3>
-      <div style="background: #2c3e50; height: 20px; border-radius: 10px; overflow: hidden; margin: 10px 0;">
-        <div id="download-progress-bar" style="background: #3498db; height: 100%; width: 0%; transition: width 0.3s;"></div>
-      </div>
-      <p id="download-status" style="margin: 5px 0 0 0; font-size: 0.9em;">Preparing download...</p>
+// Display app version
+function displayAppVersion() {
+  const versionElement = document.getElementById('version-display');
+  if (versionElement) {
+    // Get version from package.json (set in main.js)
+    const version = window.appVersion || '1.0.5';
+    
+    // Clear any existing content and styles
+    versionElement.innerHTML = '';
+    versionElement.removeAttribute('style');
+    
+    // Style the container
+    versionElement.style.position = 'fixed';
+    versionElement.style.bottom = '10px';
+    versionElement.style.left = '10px';
+    versionElement.style.zIndex = '1000';
+    versionElement.style.pointerEvents = 'none';
+    
+    // Create and style the version text
+    const versionText = document.createElement('span');
+    versionText.textContent = `v${version}`;
+    versionText.style.cssText = `
+      font-size: 11px;
+      font-weight: 500;
+      color: #2c3e50;
+      background: rgba(255, 255, 255, 0.8);
+      padding: 2px 8px;
+      border-radius: 10px;
+      border: 1px solid #e0e0e0;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     `;
-  });
+    
+    // Add the text to the container
+    versionElement.appendChild(versionText);
+    
+    // Ensure it's in the DOM
+    if (!versionElement.parentNode) {
+      document.body.appendChild(versionElement);
+    }
+  } else {
+    console.error('Version display element not found');
+  }
+}
+
+// Initialize app when DOM is loaded
+document.addEventListener('DOMContentLoaded', () => {
+  // Wait a moment for the main process to set the version
+  setTimeout(() => {
+    displayAppVersion();
+  }, 100);
   
-  document.getElementById('remind-later').addEventListener('click', () => {
-    updateNotification.style.display = 'none';
-    // Show the notification again in 1 hour
-    setTimeout(() => {
-      if (updateAvailable) {
-        updateNotification.style.display = 'block';
-      }
-    }, 60 * 60 * 1000);
-  });
+  initUpdateNotification();
+  
+  // Check for updates after a short delay
+  setTimeout(() => {
+    ipcRenderer.send('check-for-updates');
+  }, 2000);
 });
 
-// Handle download progress
-ipcRenderer.on('download-progress', (event, progressObj) => {
-  if (!updateDownloading) return;
+// Initialize update notification element
+function initUpdateNotification() {
+  // Remove any existing update notification
+  const existing = document.getElementById('update-notification');
+  if (existing) existing.remove();
   
-  const percent = Math.round(progressObj.percent || 0);
-  const mbps = progressObj.bytesPerSecond ? (progressObj.bytesPerSecond / (1024 * 1024)).toFixed(2) : 0;
-  
-  const progressBar = document.getElementById('download-progress-bar');
-  const statusText = document.getElementById('download-status');
-  
-  if (progressBar) progressBar.style.width = `${percent}%`;
-  if (statusText) statusText.textContent = `Downloading: ${percent}% (${mbps} MB/s)`;
-});
-
-// Handle update downloaded
-ipcRenderer.on('update-downloaded', () => {
-  updateNotification.innerHTML = `
-    <h3 style="margin: 0 0 10px 0; color: #2ecc71;">Update Ready to Install</h3>
-    <p style="margin: 0 0 10px 0;">The update has been downloaded. The application will restart to install the update in 5 seconds.</p>
-    <button id="restart-now" style="background: #2ecc71; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer;">Restart Now</button>
+  // Create new notification
+  const notification = document.createElement('div');
+  notification.id = 'update-notification';
+  notification.style.cssText = `
+    display: none;
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background-color: #2c3e50;
+    color: white;
+    padding: 15px;
+    border-radius: 5px;
+    z-index: 1000;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    max-width: 300px;
+    font-family: 'Segoe UI', Arial, sans-serif;
   `;
   
-  document.getElementById('restart-now').addEventListener('click', () => {
-    ipcRenderer.send('install-update');
+  notification.innerHTML = `
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+      <h3 id="update-title" style="margin: 0; color: #3498db; font-size: 16px;">Update Available</h3>
+      <button id="close-update" style="background: none; border: none; color: #ecf0f1; cursor: pointer; font-size: 16px;">×</button>
+    </div>
+    <div id="update-progress" style="display: none; margin: 10px 0;">
+      <div style="background: #2c3e50; height: 10px; border-radius: 5px; overflow: hidden; margin-bottom: 5px;">
+        <div id="update-progress-bar" style="background: #3498db; height: 100%; width: 0%; transition: width 0.3s;"></div>
+      </div>
+      <div id="update-status-text" style="font-size: 12px; color: #bdc3c7;">Preparing download...</div>
+    </div>
+    <div id="update-actions" style="display: flex; gap: 8px; margin-top: 10px;">
+      <button id="update-action-btn" style="flex: 1; background: #3498db; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">Download</button>
+    </div>
+  `;
+  
+  document.body.appendChild(notification);
+  
+  // Add event listeners
+  document.getElementById('close-update').addEventListener('click', () => {
+    notification.style.display = 'none';
+  });
+  
+  document.getElementById('update-action-btn').addEventListener('click', () => {
+    ipcRenderer.invoke('download-and-install-update').catch(error => {
+      showUpdateError(error.message || 'Failed to start download');
+    });
+  });
+  
+  return notification;
+}
+
+// Show update notification with specific state
+function showUpdateNotification(state, options = {}) {
+  const notification = document.getElementById('update-notification') || initUpdateNotification();
+  const title = document.getElementById('update-title');
+  const progress = document.getElementById('update-progress');
+  const progressBar = document.getElementById('update-progress-bar');
+  const statusText = document.getElementById('update-status-text');
+  const actionBtn = document.getElementById('update-action-btn');
+  
+  switch (state) {
+    case 'available':
+      title.textContent = `Update v${options.version} Available`;
+      statusText.textContent = 'A new version is available for download.';
+      actionBtn.textContent = 'Download Update';
+      actionBtn.style.display = 'block';
+      progress.style.display = 'none';
+      notification.style.display = 'block';
+      break;
+      
+    case 'downloading':
+      title.textContent = 'Downloading Update...';
+      progress.style.display = 'block';
+      actionBtn.style.display = 'none';
+      notification.style.display = 'block';
+      break;
+      
+    case 'downloaded':
+      title.textContent = 'Update Ready';
+      statusText.textContent = 'The update has been downloaded.';
+      actionBtn.textContent = 'Restart & Install';
+      actionBtn.style.display = 'block';
+      notification.style.display = 'block';
+      break;
+      
+    case 'error':
+      title.textContent = 'Update Error';
+      statusText.textContent = options.message || 'An error occurred during update.';
+      actionBtn.textContent = 'Retry';
+      actionBtn.style.display = 'block';
+      notification.style.display = 'block';
+      break;
+  }
+  
+  // Update progress if provided
+  if (options.progress !== undefined) {
+    const percent = Math.floor(options.progress);
+    progressBar.style.width = `${percent}%`;
+    
+    if (options.bytesPerSecond) {
+      const speed = Math.round(options.bytesPerSecond / 1024);
+      const downloaded = Math.round(options.transferred / 1024 / 1024 * 100) / 100;
+      const total = Math.round(options.total / 1024 / 1024 * 100) / 100;
+      statusText.textContent = `Downloading: ${percent}% (${downloaded}MB of ${total}MB) at ${speed}KB/s`;
+    } else if (state === 'downloading') {
+      statusText.textContent = `Downloading: ${percent}%`;
+    }
+  }
+}
+
+// IPC event handlers
+ipcRenderer.on('update-available', (event, info) => {
+  showUpdateNotification('available', { version: info.version });
+});
+
+ipcRenderer.on('download-progress', (event, progressObj) => {
+  showUpdateNotification('downloading', {
+    progress: progressObj.percent || 0,
+    bytesPerSecond: progressObj.bytesPerSecond,
+    transferred: progressObj.transferred,
+    total: progressObj.total
   });
 });
 
-// Add styles for the update notification
-const style = document.createElement('style');
-style.textContent = `
-  #update-notification button {
-    transition: background-color 0.2s;
-  }
-  #update-notification button:hover {
-    opacity: 0.9;
-  }
-  #update-notification button:active {
-    transform: translateY(1px);
-  }
-`;
-document.head.appendChild(style);
+ipcRenderer.on('update-downloaded', () => {
+  showUpdateNotification('downloaded');
+});
+
+ipcRenderer.on('update-error', (event, message) => {
+  showUpdateNotification('error', { message });
+});
+
+ipcRenderer.on('update-not-available', () => {
+  // Optionally show a small toast that you're up to date
+  const notification = document.getElementById('update-notification');
+  if (notification) notification.style.display = 'none';
+});
+
+// Theme Management
+function initTheme() {
+    // Check for saved theme preference or use system preference
+    const savedTheme = localStorage.getItem('theme') || 
+                      (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    
+    // Apply the saved theme
+    setTheme(savedTheme);
+    
+    // Set up theme toggle button
+    const themeToggle = document.getElementById('theme-toggle');
+    if (themeToggle) {
+        themeToggle.addEventListener('click', toggleTheme);
+        updateThemeIcon(savedTheme);
+    }
+}
+
+function setTheme(theme) {
+    // Apply theme to document
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+    
+    // Update theme icon
+    updateThemeIcon(theme);
+    
+    // Dispatch event in case other components need to react to theme changes
+    document.dispatchEvent(new CustomEvent('themeChanged', { detail: { theme } }));
+}
+
+function toggleTheme() {
+    const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    setTheme(newTheme);
+}
+
+function updateThemeIcon(theme) {
+    const themeIcon = document.querySelector('.theme-icon');
+    if (!themeIcon) return;
+    
+    themeIcon.textContent = theme === 'dark' ? '🌞' : '🌙';
+    themeIcon.setAttribute('title', `Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`);
+}
+
+// Initialize theme when DOM is loaded
+document.addEventListener('DOMContentLoaded', () => {
+    // Initialize theme
+    initTheme();
+    
+    // Set version number from package.json
+    const { ipcRenderer } = require('electron');
+    ipcRenderer.invoke('get-app-version').then(version => {
+        const versionElement = document.getElementById('version-display');
+        if (versionElement) {
+            versionElement.textContent = `v${version}`;
+        }
+    }).catch(console.error);
+    
+    // Rest of your existing DOMContentLoaded code...
+});
+
+// Add this to your existing IPC handlers
+ipcRenderer.on('set-theme', (event, theme) => {
+    if (theme === 'toggle') {
+        toggleTheme();
+    } else if (['light', 'dark'].includes(theme)) {
+        setTheme(theme);
+    }
+});
+
+// Add this to your existing IPC handlers
+ipcRenderer.on('get-theme', (event) => {
+    const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+    event.returnValue = currentTheme;
+});
+
+// Add this to your existing IPC handlers
+ipcRenderer.on('system-theme-changed', (event, theme) => {
+    // Only change theme if user hasn't set a preference
+    if (!localStorage.getItem('theme')) {
+        setTheme(theme);
+    }
+});
+
+// Exit button functionality
+const exitButton = document.getElementById('exit-btn');
+if (exitButton) {
+    exitButton.addEventListener('click', () => {
+        ipcRenderer.send('close-app');
+    });
+}
+
+// Minimize button functionality
+const minimizeButton = document.getElementById('minimize-btn');
+if (minimizeButton) {
+    minimizeButton.addEventListener('click', () => {
+        ipcRenderer.send('minimize-window');
+    });
+}

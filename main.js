@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen, Tray, Menu, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, Tray, Menu, dialog, MenuItem } = require('electron');
 const path = require('path');
 const nodemailer = require('nodemailer');
 const si = require('systeminformation');
@@ -8,83 +8,216 @@ const os = require('os');
 const { exec, spawn } = require('child_process');
 const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
+const { shell } = require('electron');
+const https = require('https');
+const { systemPreferences } = require('electron');
+const { nativeImage } = require('electron');
+
+// Import package.json to get version
+const { version } = require('./package.json');
 
 // Configure logging
-autoUpdater.logger = log;
-autoUpdater.logger.transports.file.level = 'info';
+log.transports.console.level = 'info';
+log.transports.file.level = 'debug';
 log.info('App starting...');
+
+// Set up auto-updater logging
+autoUpdater.logger = log;
+autoUpdater.autoDownload = false;
+autoUpdater.allowPrerelease = false;
 
 require('dotenv').config();
 
 let mainWindow;
-let tray;
+let tray = null;
+let isTeamViewerHandlerInitialized = false;
+let isAppInitialized = false;
+let isAppQuitting = false;
 
-// Predefined paths where TeamViewer might be installed
-const TEAMVIEWER_PATHS = [
-  'C:\\Program Files\\TeamViewer\\TeamViewer.exe',
-  'C:\\Program Files (x86)\\TeamViewer\\TeamViewer.exe'
-];
+// Platform-specific configurations
+const PLATFORM_CONFIG = {
+  isWindows: process.platform === 'win32',
+  isMac: process.platform === 'darwin',
+  isLinux: process.platform === 'linux'
+};
+
+// TeamViewer paths for different platforms
+const TEAMVIEWER_PATHS = PLATFORM_CONFIG.isWindows
+  ? [
+      'C:\\Program Files\\TeamViewer\\TeamViewer.exe',
+      'C:\\Program Files (x86)\\TeamViewer\\TeamViewer.exe'
+    ]
+  : PLATFORM_CONFIG.isMac
+  ? [
+      '/Applications/TeamViewer.app/Contents/MacOS/TeamViewer',
+      '/Applications/TeamViewer/TeamViewer.app/Contents/MacOS/TeamViewer'
+    ]
+  : [
+      '/usr/bin/teamviewer',
+      '/opt/teamviewer/teamviewer'
+    ];
 
 function isTeamViewerInstalled() {
   return TEAMVIEWER_PATHS.some(path => fs.existsSync(path));
 }
 
+/**
+ * Open a file or folder using the system's default handler
+ * @param {string} filePath Path to the file or folder
+ * @returns {Promise<void>}
+ */
 function openFileOrFolder(filePath) {
   return new Promise((resolve, reject) => {
-    console.log(`Attempting to open file: ${filePath}`);
-    exec(`start "" "${filePath}"`, (error, stdout, stderr) => {
+    console.log(`Attempting to open: ${filePath}`);
+    
+    let command;
+    if (PLATFORM_CONFIG.isWindows) {
+      command = `start "" "${filePath}"`;
+    } else if (PLATFORM_CONFIG.isMac) {
+      command = `open "${filePath}"`;
+    } else {
+      command = `xdg-open "${filePath}"`;
+    }
+
+    exec(command, (error, stdout, stderr) => {
       if (error) {
         console.error(`Error opening file: ${error}`);
         console.error(`stderr: ${stderr}`);
         reject(error);
       } else {
-        console.log(`Successfully opened file: ${filePath}`);
+        console.log(`Successfully opened: ${filePath}`);
         resolve();
       }
     });
   });
 }
 
-function downloadTeamViewerQuickSupport() {
-  const tempDownloadPath = path.join(os.tmpdir(), 'TeamViewerQS.exe');
-  const teamviewerDownloadUrl = 'https://download.teamviewer.com/download/TeamViewerQS.exe';
+/**
+ * Download and run TeamViewer QuickSupport
+ * @returns {Promise<string>} Path to the downloaded file
+ */
+async function downloadTeamViewerQuickSupport() {
+  const tempDir = os.tmpdir();
+  let downloadUrl, fileName;
 
-  return new Promise((resolve, reject) => {
-    console.log(`Attempting to download TeamViewer Quick Support from: ${teamviewerDownloadUrl}`);
-    console.log(`Download will be saved to: ${tempDownloadPath}`);
+  if (PLATFORM_CONFIG.isWindows) {
+    downloadUrl = 'https://download.teamviewer.com/download/TeamViewerQS.exe';
+    fileName = 'TeamViewerQS.exe';
+  } else if (PLATFORM_CONFIG.isMac) {
+    downloadUrl = 'https://download.teamviewer.com/download/TeamViewerQS.dmg';
+    fileName = 'TeamViewerQS.dmg';
+  } else {
+    throw new Error('Unsupported platform for TeamViewer QuickSupport');
+  }
 
-    download(mainWindow, teamviewerDownloadUrl, {
-      directory: os.tmpdir(),
-      filename: 'TeamViewerQS.exe',
-      onProgress: (progress) => {
-        console.log(`Download progress: ${(progress * 100).toFixed(2)}%`);
+  const tempPath = path.join(tempDir, fileName);
+  
+  console.log(`Downloading TeamViewer QuickSupport from: ${downloadUrl}`);
+  console.log(`Saving to: ${tempPath}`);
+
+  try {
+    // Ensure the temp directory exists
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    // Check if we already have a downloaded file
+    if (fs.existsSync(tempPath)) {
+      console.log('Found existing TeamViewer download, removing...');
+      try {
+        fs.unlinkSync(tempPath);
+      } catch (e) {
+        console.warn('Could not remove existing TeamViewer file:', e);
       }
-    })
-    .then(dl => {
-      const downloadedPath = dl.getSavePath();
-      console.log(`TeamViewer Quick Support downloaded successfully to: ${downloadedPath}`);
+    }
 
-      // Verify file exists before attempting to open
-      if (!fs.existsSync(downloadedPath)) {
-        console.error(`Download failed: File not found at ${downloadedPath}`);
-        return reject(new Error('Downloaded file not found'));
-      }
-
-      // Attempt to open the downloaded executable
-      exec(`start "" "${downloadedPath}"`, (error, stdout, stderr) => {
-        if (error) {
-          console.error(`Error launching TeamViewer Quick Support: ${error}`);
-          console.error(`stderr: ${stderr}`);
-          reject(error);
-        } else {
-          console.log('TeamViewer Quick Support launched successfully');
-          resolve(downloadedPath);
-        }
+    // Show a dialog to inform the user about the download
+    const win = BrowserWindow.getFocusedWindow();
+    if (win) {
+      dialog.showMessageBox(win, {
+        type: 'info',
+        title: 'Downloading TeamViewer QuickSupport',
+        message: 'Please wait while we download TeamViewer QuickSupport...',
+        buttons: ['OK']
       });
-    })
-    .catch(error => {
-      console.error('TeamViewer download error:', error);
-      reject(error);
+    }
+
+    // Download the file
+    await download(win || BrowserWindow.getAllWindows()[0], downloadUrl, {
+      directory: tempDir,
+      filename: fileName,
+      onProgress: (progress) => {
+        const percent = (progress.percent * 100).toFixed(2);
+        console.log(`Download progress: ${percent}%`);
+      },
+      onStarted: () => {
+        console.log('Download started');
+      },
+      onCompleted: (file) => {
+        console.log('Download completed:', file.path);
+      }
+    });
+
+    // Verify the file was downloaded
+    if (!fs.existsSync(tempPath)) {
+      throw new Error('Downloaded file not found');
+    }
+
+    console.log('File downloaded successfully, opening...');
+
+    // Open the downloaded file
+    if (PLATFORM_CONFIG.isMac) {
+      // Mount the DMG and open the application
+      try {
+        console.log('Mounting DMG...');
+        await execAsync(`hdiutil attach "${tempPath}"`);
+        const appPath = '/Volumes/TeamViewer QuickSupport/TeamViewer QuickSupport.app';
+        if (fs.existsSync(appPath)) {
+          console.log('Launching TeamViewer QuickSupport...');
+          await execAsync(`open -a "${appPath}"`);
+        } else {
+          throw new Error('TeamViewer QuickSupport.app not found in DMG');
+        }
+      } catch (e) {
+        console.error('Error mounting/launching DMG:', e);
+        throw new Error('Failed to mount or launch TeamViewer DMG');
+      }
+    } else {
+      // For Windows, just open the downloaded file
+      console.log('Launching TeamViewer QuickSupport...');
+      await openFileOrFolder(tempPath);
+    }
+
+    return tempPath;
+  } catch (error) {
+    console.error('TeamViewer download/launch error:', error);
+    
+    // Show error to user
+    const win = BrowserWindow.getFocusedWindow();
+    if (win) {
+      dialog.showErrorBox(
+        'TeamViewer Download Failed',
+        `Could not download or launch TeamViewer QuickSupport. Please try again or contact support.\n\nError: ${error.message}`
+      );
+    }
+    
+    throw error;
+  }
+}
+
+/**
+ * Helper function to promisify exec
+ */
+function execAsync(command) {
+  return new Promise((resolve, reject) => {
+    exec(command, (error, stdout) => {
+      if (error) {
+        console.error(`Command failed: ${command}`);
+        console.error(`Error: ${error}`);
+        reject(error);
+      } else {
+        resolve(stdout);
+      }
     });
   });
 }
@@ -213,7 +346,6 @@ async function performSecurityScan() {
 // Enhanced system information retrieval
 ipcMain.handle('get-system-info', async () => {
   try {
-    const os = require('os');
     const { execSync } = require('child_process');
     const si = require('systeminformation');
 
@@ -558,6 +690,13 @@ ipcMain.handle('get-system-info', async () => {
   }
 });
 
+// IPC handler to get the app version
+ipcMain.handle('get-app-version', () => {
+  const version = app.getVersion();
+  log.info(`Sending app version to renderer: ${version}`);
+  return version;
+});
+
 // Ticket Submission Handler
 ipcMain.handle('send-ticket', async (event, ticketData) => {
     console.log(`[send-ticket handler] Invoked at ${new Date().toISOString()}`);
@@ -673,224 +812,798 @@ ipcMain.handle('send-ticket', async (event, ticketData) => {
 
 // Consolidated TeamViewer launch handler
 function setupTeamViewerHandler() {
+  // Prevent multiple initializations
+  if (isTeamViewerHandlerInitialized) {
+    console.log('TeamViewer handler already initialized');
+    return;
+  }
+
+  console.log('Initializing TeamViewer handler...');
+  
   // Remove all existing 'launch-teamviewer' handlers
-  ipcMain.removeAllListeners('launch-teamviewer');
+  ipcMain.removeHandler('launch-teamviewer');
 
   // Add new handler
   ipcMain.handle('launch-teamviewer', async (event) => {
     console.log('TeamViewer launch handler called');
 
-    // First, check if TeamViewer is already installed
-    if (isTeamViewerInstalled()) {
-      try {
-        // Try to launch existing TeamViewer installations
-        const launchPath = TEAMVIEWER_PATHS.find(path => fs.existsSync(path));
-        if (launchPath) {
-          console.log(`Launching existing TeamViewer from: ${launchPath}`);
-          await openFileOrFolder(launchPath);
-          return { success: true, installed: true };
-        }
-      } catch (error) {
-        console.error('Error launching existing TeamViewer:', error);
-      }
-    }
-
-    // If not installed, download TeamViewer Quick Support
     try {
-      console.log('TeamViewer not found, initiating download');
-      const downloadPath = await downloadTeamViewerQuickSupport();
-      return { 
-        success: true, 
-        installed: false, 
-        downloadPath: downloadPath 
-      };
+      // First, check if TeamViewer is already installed
+      if (isTeamViewerInstalled()) {
+        try {
+          // Try to launch existing TeamViewer installations
+          const launchPath = TEAMVIEWER_PATHS.find(path => {
+            try {
+              const exists = fs.existsSync(path);
+              console.log(`Checking if TeamViewer exists at ${path}: ${exists}`);
+              return exists;
+            } catch (e) {
+              console.error(`Error checking path ${path}:`, e);
+              return false;
+            }
+          });
+          
+          if (launchPath) {
+            console.log(`Launching existing TeamViewer from: ${launchPath}`);
+            await openFileOrFolder(launchPath);
+            return { success: true, installed: true };
+          }
+        } catch (error) {
+          console.error('Error in TeamViewer launch process:', error);
+          // Continue to download if launch fails
+        }
+      }
+
+      // If not installed or launch failed, download TeamViewer Quick Support
+      console.log('TeamViewer not found or failed to launch, initiating download');
+      try {
+        const downloadPath = await downloadTeamViewerQuickSupport();
+        return { 
+          success: true, 
+          installed: false, 
+          downloadPath: downloadPath 
+        };
+      } catch (error) {
+        console.error('TeamViewer download failed:', error);
+        throw new Error(`Failed to download TeamViewer: ${error.message}`);
+      }
     } catch (error) {
-      console.error('TeamViewer download error:', error);
-      return { 
-        success: false, 
-        error: error.message || 'Failed to download TeamViewer Quick Support' 
-      };
+      console.error('TeamViewer handler error:', error);
+      throw error;
     }
   });
+
+  isTeamViewerHandlerInitialized = true;
+  console.log('TeamViewer handler initialized successfully');
 }
 
+/**
+ * Create the application window
+ */
 function createWindow() {
-  // Setup TeamViewer handler
-  setupTeamViewerHandler();
+  // Get the primary display dimensions
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+  
+  // Adjusted window dimensions to match the second image
+  const windowWidth = 380;  // Slightly wider to accommodate content
+  const windowHeight = 860; // Increased from 820px to 860px for even more space
+  const margin = 20;        // Margin from screen edges
 
-  // Get the primary display
-  const primaryDisplay = screen.getPrimaryDisplay();
-  const { width, height } = primaryDisplay.workAreaSize;
-
-  // Widget-like window configuration
+  // Create the browser window with native title bar
   mainWindow = new BrowserWindow({
-    width: 350,  // Narrow width for widget-like appearance
-    height: 780, // Increased from 600 to 780 (30% increase)
-    x: width - 370, // Position 20px from right edge
-    y: height - 800, // Adjusted y position to maintain bottom alignment
-    frame: false, // Frameless window
-    transparent: true, // Allows for custom shaped window
-    alwaysOnTop: false, // Sits behind other windows
+    width: windowWidth,
+    height: windowHeight,
+    x: width - windowWidth - margin, // Position on right side
+    y: height - windowHeight - margin, // Position near bottom
+    minWidth: 380,
+    minHeight: 780, // Increased minimum height to maintain proportions
+    show: true, // Changed from false to true to show window on startup
+    title: `DBS Support Desk v${version}`,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
-      enableRemoteModule: true
+      enableRemoteModule: true,
+      spellcheck: true,
+      webviewTag: true
     },
-    skipTaskbar: true, // Don't show in taskbar
-    show: false // Don't show immediately
+    icon: path.join(__dirname, 'assets', 'DBS_Logo.ico'),
+    frame: true, // Keep native frame
+    backgroundColor: '#f5f5f5', // Light gray background to match the form
+    skipTaskbar: false, // Show in taskbar
+    resizable: true,
+    autoHideMenuBar: false, // Changed from true to false to show menu bar by default
+    titleBarStyle: 'default',
+    titleBarOverlay: false
   });
 
-  // Load the index.html
+  // Load the index.html file
   mainWindow.loadFile('index.html');
 
-  // Only show when activated
+  // Show the window when it's ready
   mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
+    console.log('Window is ready');
+    // Set the version in the title bar
+    mainWindow.setTitle(`DBS Support Desk v${version}`);
+    
+    // Ensure content is properly sized
+    mainWindow.webContents.on('did-finish-load', () => {
+      // Add some CSS to ensure proper spacing
+      mainWindow.webContents.insertCSS(`
+        body {
+          padding: 15px;
+          margin: 0;
+          box-sizing: border-box;
+        }
+        .form-container {
+          max-width: 100%;
+          box-sizing: border-box;
+        }
+        .form-group {
+          margin-bottom: 15px;
+        }
+      `);
+    });
   });
 
-  // Bring window to front when clicked
-  mainWindow.on('focus', () => {
-    mainWindow.setAlwaysOnTop(true);
-  });
-
-  // Return to background when focus is lost
-  mainWindow.on('blur', () => {
-    mainWindow.setAlwaysOnTop(false);
-  });
-
-  // Create system tray icon
-  tray = new Tray(path.join(__dirname, 'assets/DBS_Logo.png'));
-  const contextMenu = Menu.buildFromTemplate([
-    { 
-      label: 'Restore', 
-      click: () => {
-        mainWindow.show();
-        mainWindow.focus();
-      } 
-    },
-    { 
-      label: 'Exit', 
-      click: () => {
-        app.quit();
-      } 
-    }
-  ]);
-  tray.setToolTip('DBS Support Desk');
-  tray.setContextMenu(contextMenu);
-
-  // IPC handlers for window controls
-  ipcMain.on('minimize-window', () => {
-    mainWindow.hide();
-  });
-
-  // Optional: Add custom window controls if needed
+  // Handle window close event (minimize to tray instead of quitting)
   mainWindow.on('close', (event) => {
+    if (!isAppQuitting) {
+      console.log('Window close prevented, minimizing to tray');
+      event.preventDefault();
+      mainWindow.hide();
+      return false;
+    }
+    return true;
+  });
+  
+  // Handle minimize event
+  mainWindow.on('minimize', (event) => {
+    console.log('Window minimize event');
     event.preventDefault();
     mainWindow.hide();
   });
+
+  // Open external links in the default browser
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  // Enable built-in spell checker
+  mainWindow.webContents.session.setSpellCheckerEnabled(true);
+  
+  // Enable DevTools in development
+  if (process.env.NODE_ENV === 'development') {
+    mainWindow.webContents.openDevTools({ mode: 'detach' });
+  }
 }
 
 // Auto-update functionality
-function checkForUpdates() {
-  log.info('Checking for updates...');
+async function checkAppDirectoryAccess() {
+  try {
+    // Use the user data directory instead of the app directory
+    const userDataPath = app.getPath('userData');
+    log.info(`Checking write access to user data directory: ${userDataPath}`);
+    
+    // Create the directory if it doesn't exist
+    if (!fs.existsSync(userDataPath)) {
+      fs.mkdirSync(userDataPath, { recursive: true });
+    }
+    
+    // Test write access by creating a temporary file
+    const testFilePath = path.join(userDataPath, 'write-test.tmp');
+    fs.writeFileSync(testFilePath, 'test');
+    fs.unlinkSync(testFilePath);
+    
+    log.info('Write access to user data directory: Granted');
+    return true;
+  } catch (error) {
+    log.error(`No write access to user data directory: ${error.message}`);
+    return false;
+  }
+}
+
+async function checkForUpdates(manualCheck = false) {
+  try {
+    log.info('Checking for updates...');
+    
+    // Always check the user data directory, not the app directory
+    const hasAccess = await checkAppDirectoryAccess();
+    if (!hasAccess) {
+      const errorMsg = 'Cannot check for updates: No write access to user data directory';
+      log.error(errorMsg);
+      if (mainWindow && manualCheck) {
+        mainWindow.webContents.send('update-error', errorMsg);
+      }
+      return { success: false, error: errorMsg };
+    }
+
+    // Set the feed URL for GitHub releases
+    const updateServerUrl = 'https://github.com/dbsdeskza/dbs-support-desk';
+    autoUpdater.setFeedURL({
+      provider: 'github',
+      owner: 'dbsdeskza',
+      repo: 'dbs-support-desk',
+      private: false
+    });
+    
+    log.info('Feed URL set, checking for updates...');
+    
+    // Check for updates
+    const updateCheckResult = await autoUpdater.checkForUpdates();
+    log.info('Update check result:', updateCheckResult ? 'Update available' : 'No updates available');
+    
+    return { success: true, updateInfo: updateCheckResult };
+    
+  } catch (error) {
+    const errorMsg = `Error checking for updates: ${error.message}`;
+    log.error(errorMsg);
+    if (mainWindow && manualCheck) {
+      mainWindow.webContents.send('update-error', errorMsg);
+    }
+    return { success: false, error: errorMsg };
+  }
+}
+
+// Configure auto-updater
+function setupAutoUpdater() {
+  log.info('Setting up auto-updater...');
   
-  // Only check for updates in production
-  if (process.env.NODE_ENV === 'development') {
-    log.info('Skipping update check in development mode');
+  // Configure auto-updater
+  autoUpdater.autoDownload = false;
+  autoUpdater.allowPrerelease = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.fullChangelog = true;
+  
+  // Set feed URL for GitHub releases
+  const repo = 'dbsdeskza/dbs-support-desk';
+  autoUpdater.setFeedURL({
+    provider: 'github',
+    owner: 'dbsdeskza',
+    repo: 'dbs-support-desk',
+    private: false,
+    vPrefixedTagName: true,
+    releaseType: 'release',
+  });
+
+  // Event listeners
+  autoUpdater.on('checking-for-update', () => {
+    log.info('Checking for updates...');
+    if (mainWindow) {
+      mainWindow.webContents.send('update-status', 'Checking for updates...');
+    }
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    log.info('Update available:', info.version);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-available', info);
+    }
+  });
+
+  autoUpdater.on('update-not-available', (info) => {
+    log.info('No updates available');
+    if (mainWindow) {
+      mainWindow.webContents.send('update-not-available', info);
+    }
+  });
+
+  autoUpdater.on('download-progress', (progressObj) => {
+    const percent = Math.floor(progressObj.percent || 0);
+    log.info(`Download progress: ${percent}%`);
+    if (mainWindow) {
+      mainWindow.webContents.send('download-progress', progressObj);
+    }
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    log.info('Update downloaded, will install in 5s');
+    if (mainWindow) {
+      mainWindow.webContents.send('update-downloaded', info);
+    }
+    // Auto install after 5 seconds
+    setTimeout(() => {
+      autoUpdater.quitAndInstall();
+    }, 5000);
+  });
+
+  autoUpdater.on('error', (err) => {
+    log.error('Error in auto-updater:', err);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-error', `Auto-update error: ${err.message}`);
+    }
+  });
+  
+  // Initial check for updates after a short delay
+  setTimeout(() => {
+    log.info('Performing initial update check...');
+    checkForUpdates();
+  }, 3000);
+  
+  // Check for updates every 4 hours
+  setInterval(checkForUpdates, 4 * 60 * 60 * 1000);
+}
+
+// IPC handler for manual update check
+ipcMain.on('check-for-updates', () => {
+  log.info('Manual update check requested');
+  checkForUpdates(true);
+});
+
+// IPC handler for manual download and install
+ipcMain.handle('download-and-install-update', async () => {
+  try {
+    log.info('Starting manual update process...');
+    
+    if (!autoUpdater) {
+      log.error('AutoUpdater is not initialized');
+      return { success: false, error: 'AutoUpdater not initialized' };
+    }
+
+    log.info('Checking for updates...');
+    const updateCheckResult = await autoUpdater.checkForUpdates();
+    
+    if (!updateCheckResult || !updateCheckResult.updateInfo) {
+      log.error('No update information available');
+      return { success: false, error: 'No update information available' };
+    }
+
+    const { version, path, releaseNotes } = updateCheckResult.updateInfo;
+    log.info(`Update found: v${version}`, { path, releaseNotes });
+
+    if (mainWindow) {
+      mainWindow.webContents.send('update-status', `Found update v${version}, preparing download...`);
+    }
+
+    // Set up event listeners for the download
+    return new Promise((resolve) => {
+      autoUpdater.once('download-progress', (progressObj) => {
+        log.info('Download progress:', progressObj);
+        if (mainWindow) {
+          mainWindow.webContents.send('download-progress', progressObj);
+        }
+      });
+
+      autoUpdater.once('update-downloaded', (info) => {
+        log.info('Update downloaded:', info);
+        if (mainWindow) {
+          mainWindow.webContents.send('update-downloaded', info);
+        }
+        resolve({ success: true, version: info.version });
+      });
+
+      autoUpdater.once('error', (error) => {
+        log.error('Download error:', error);
+        if (mainWindow) {
+          mainWindow.webContents.send('update-error', error.message);
+        }
+        resolve({ success: false, error: error.message });
+      });
+
+      // Start the download
+      log.info('Starting download...');
+      autoUpdater.downloadUpdate().catch(error => {
+        log.error('Failed to start download:', error);
+        if (mainWindow) {
+          mainWindow.webContents.send('update-error', `Failed to start download: ${error.message}`);
+        }
+        resolve({ success: false, error: error.message });
+      });
+    });
+  } catch (error) {
+    log.error('Error in download handler:', error);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-error', `Update error: ${error.message}`);
+    }
+    return { success: false, error: error.message };
+  }
+});
+
+// IPC handler for force closing the app
+ipcMain.on('force-close-app', () => {
+  log.info('Force closing app for update...');
+  
+  // Close all windows
+  const windows = BrowserWindow.getAllWindows();
+  windows.forEach(window => {
+    if (!window.isDestroyed()) {
+      window.destroy();
+    }
+  });
+  
+  // Force exit after a short delay
+  setTimeout(() => {
+    log.info('Force exiting app...');
+    app.exit(0);
+  }, 500);
+});
+
+// IPC handler for restarting the app
+ipcMain.on('restart-app', async () => {
+  log.info('Preparing to restart app for update...');
+  
+  try {
+    // Close all windows
+    const windows = BrowserWindow.getAllWindows();
+    for (const window of windows) {
+      window.removeAllListeners('close');
+      window.close();
+    }
+    
+    // Give some time for windows to close
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // Force quit the app
+    log.info('Calling quitAndInstall...');
+    
+    // First try the normal way
+    const success = autoUpdater.quitAndInstall(false, true);
+    
+    // If that fails, force close after a delay
+    if (!success) {
+      log.warn('quitAndInstall returned false, forcing close...');
+      setTimeout(() => {
+        app.exit(0);
+      }, 1000);
+    }
+    
+  } catch (error) {
+    log.error('Error during restart:', error);
+    // If we get here, try the forceful approach
+    app.exit(0);
+    process.exit(0);
+  }
+});
+
+// IPC handler to get the app version
+// Removed duplicate IPC handler
+
+// Handle theme preference changes
+ipcMain.on('theme-changed', (event, theme) => {
+  // Save theme preference to disk if needed
+  // This can be used to persist theme across app restarts
+  if (mainWindow) {
+    mainWindow.webContents.send('set-theme', theme);
+  }
+});
+
+// Listen for system theme changes
+systemPreferences.on('updated', (event, change) => {
+  if (change === 'systemPreferences' && mainWindow) {
+    const isDarkMode = systemPreferences.isDarkMode();
+    mainWindow.webContents.send('system-theme-changed', isDarkMode ? 'dark' : 'light');
+  }
+});
+
+// Handle before-quit event
+app.on('before-quit', (e) => {
+  log.info('App is about to quit...');
+  // Prevent the default quit behavior to ensure our cleanup runs
+  e.preventDefault();
+  
+  // Close all windows
+  const windows = BrowserWindow.getAllWindows();
+  for (const window of windows) {
+    if (!window.isDestroyed()) {
+      window.destroy();
+    }
+  }
+  
+  // Force quit after a short delay
+  setTimeout(() => {
+    app.exit(0);
+  }, 1000);
+});
+
+// Auto-update error handler
+process.on('unhandledRejection', (reason, promise) => {
+  log.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  if (mainWindow) {
+    mainWindow.webContents.send('update-error', reason instanceof Error ? reason.message : String(reason));
+  }
+});
+
+// Log uncaught exceptions
+process.on('uncaughtException', (error) => {
+  log.error('Uncaught Exception:', error);
+  if (mainWindow) {
+    mainWindow.webContents.send('update-error', error.message || 'An unexpected error occurred');
+  }
+});
+
+// Create and configure the system tray icon and context menu
+function createSystemTray() {
+  // Clean up existing tray if it exists
+  if (tray) {
+    try {
+      tray.destroy();
+    } catch (e) {
+      console.error('Error destroying existing tray:', e);
+    }
+    tray = null;
+  }
+
+  try {
+    console.log('Creating system tray...');
+    
+    // Handle icon path for both development and production
+    let iconPath;
+    if (app.isPackaged) {
+      // In production, use resources path
+      iconPath = path.join(process.resourcesPath, 'assets', 'DBS_Logo.ico');
+    } else {
+      // In development, use the regular path
+      iconPath = path.join(__dirname, 'assets', 'DBS_Logo.ico');
+    }
+    
+    console.log('Using icon path:', iconPath);
+    
+    // Load the icon with error handling
+    let trayIcon;
+    try {
+      trayIcon = nativeImage.createFromPath(iconPath);
+      if (trayIcon.isEmpty()) {
+        throw new Error('Icon file is empty or invalid');
+      }
+    } catch (error) {
+      console.error('Failed to load tray icon:', error);
+      // Fallback to a blank icon if the file can't be loaded
+      trayIcon = nativeImage.createEmpty();
+    }
+    
+    // Create the tray with the icon
+    tray = new Tray(trayIcon);
+    
+    // Set the tooltip
+    tray.setToolTip(`DBS Support Desk v${app.getVersion()}`);
+    
+    // Handle click events
+    tray.on('click', () => {
+      console.log('Tray icon clicked');
+      if (mainWindow) {
+        if (mainWindow.isVisible()) {
+          mainWindow.hide();
+        } else {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      }
+    });
+
+    // Create and set context menu
+    const contextMenu = Menu.buildFromTemplate([
+      {
+        label: `DBS Support Desk v${app.getVersion()}`,
+        enabled: false
+      },
+      { type: 'separator' },
+      {
+        label: 'Show DBS Support Desk',
+        click: () => {
+          if (mainWindow) {
+            mainWindow.show();
+            mainWindow.focus();
+          }
+        }
+      },
+      { type: 'separator' },
+      {
+        label: 'Quit',
+        click: () => {
+          isAppQuitting = true;
+          app.quit();
+        }
+      }
+    ]);
+    
+    tray.setContextMenu(contextMenu);
+    console.log('Tray created successfully');
+    
+  } catch (error) {
+    console.error('Failed to create system tray:', error);
+  }
+}
+
+// Toggle window visibility
+function toggleWindow() {
+  console.log('Toggling window...');
+  
+  if (!mainWindow) {
+    console.log('No main window, creating new one...');
+    createWindow();
     return;
   }
 
-  autoUpdater.autoDownload = false; // We'll manually start the download
-  autoUpdater.allowPrerelease = false; // Only stable releases
-  autoUpdater.allowDowngrade = false; // Don't allow downgrading
-
-  // Check for updates
-  autoUpdater.checkForUpdates()
-    .then(updateCheckResult => {
-      if (updateCheckResult) {
-        log.info('Update available:', updateCheckResult.updateInfo.version);
-        // Notify renderer that an update is available
-        mainWindow.webContents.send('update-available', updateCheckResult.updateInfo);
-      } else {
-        log.info('No updates available');
-      }
-    })
-    .catch(err => {
-      log.error('Error checking for updates:', err);
-    });
+  if (mainWindow.isVisible() && mainWindow.isFocused()) {
+    console.log('Window is visible and focused, minimizing...');
+    mainWindow.minimize();
+    mainWindow.hide();
+    if (PLATFORM_CONFIG.isMac) app.dock.hide();
+  } else {
+    console.log('Showing and focusing window...');
+    if (PLATFORM_CONFIG.isMac) app.dock.show();
+    
+    if (mainWindow.isMinimized()) {
+      console.log('Restoring minimized window...');
+      mainWindow.restore();
+    }
+    
+    mainWindow.show();
+    mainWindow.focus();
+    
+    // Bring to front
+    mainWindow.setAlwaysOnTop(true);
+    mainWindow.focus();
+    mainWindow.setAlwaysOnTop(false);
+  }
 }
 
-// Auto-updater events
-autoUpdater.on('checking-for-update', () => {
-  log.info('Checking for update...');  
-  mainWindow.webContents.send('update-status', 'Checking for updates...');
-});
+// Create application menu
+function createApplicationMenu() {
+  const template = [
+    {
+      label: 'File',
+      submenu: [
+        { role: 'close', label: 'Close Window' }
+      ]
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'delete' },
+        { type: 'separator' },
+        { role: 'selectAll' }
+      ]
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    },
+    {
+      role: 'window',
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' },
+        { role: 'zoom' },
+        { type: 'separator' },
+        { role: 'front' }
+      ]
+    },
+    {
+      role: 'help',
+      label: 'Help',
+      submenu: [
+        {
+          label: 'Learn More',
+          click: async () => {
+            const { shell } = require('electron')
+            await shell.openExternal('https://dbs.co.za')
+          }
+        }
+      ]
+    }
+  ]
 
-autoUpdater.on('update-available', (info) => {
-  log.info('Update available:', info.version);
-  mainWindow.webContents.send('update-available', info);
-});
+  const menu = Menu.buildFromTemplate(template)
+  Menu.setApplicationMenu(menu)
+}
 
-autoUpdater.on('update-not-available', (info) => {
-  log.info('No updates available');
-  mainWindow.webContents.send('update-not-available');
-});
+function checkIconFiles() {
+  const iconPaths = [
+    path.join(__dirname, 'assets', 'DBS_Logo.ico'),
+    path.join(__dirname, 'assets', 'icon.ico')
+  ];
 
-autoUpdater.on('error', (err) => {
-  log.error('Error in auto-updater:', err);
-  mainWindow.webContents.send('update-error', err.message || 'Error during update');
-});
-
-autoUpdater.on('download-progress', (progressObj) => {
-  log.info('Download progress:', progressObj);
-  mainWindow.webContents.send('download-progress', progressObj);
-});
-
-autoUpdater.on('update-downloaded', (info) => {
-  log.info('Update downloaded, will install in 5 seconds');
-  mainWindow.webContents.send('update-downloaded', info);
+  console.log('\n=== Checking Icon Files ===');
   
-  // Wait 5 seconds before installing to let the user save their work
-  setTimeout(() => {
-    log.info('Restarting app to install update...');
-    autoUpdater.quitAndInstall();
-  }, 5000);
-});
-
-// IPC handlers for update actions
-ipcMain.on('download-update', () => {
-  log.info('Starting update download...');
-  mainWindow.webContents.send('update-status', 'Starting download...');
-  autoUpdater.downloadUpdate();
-});
-
-ipcMain.on('install-update', () => {
-  log.info('Installing update...');
-  mainWindow.webContents.send('update-status', 'Installing update...');
-  autoUpdater.quitAndInstall();
-});
-
-// Modify app lifecycle to keep app running in background
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    // Do nothing, keep app running
-  }
-});
-
-app.on('activate', () => {
-  if (mainWindow === null) {
-    createWindow();
-  } else {
-    mainWindow.show();
-  }
-});
+  iconPaths.forEach(iconPath => {
+    try {
+      const exists = fs.existsSync(iconPath);
+      console.log(`\nFile: ${iconPath}`);
+      console.log(`Exists: ${exists}`);
+      
+      if (exists) {
+        const stats = fs.statSync(iconPath);
+        console.log(`Size: ${stats.size} bytes`);
+        
+        try {
+          const img = nativeImage.createFromPath(iconPath);
+          if (img.isEmpty()) {
+            console.log('Status: Invalid or corrupted icon file');
+          } else {
+            console.log('Status: Valid icon file');
+            console.log('Dimensions:', img.getSize());
+            return img; // Return the first valid icon
+          }
+        } catch (e) {
+          console.log('Error loading icon:', e.message);
+        }
+      }
+    } catch (error) {
+      console.error(`Error checking ${iconPath}:`, error.message);
+    }
+  });
+  console.log('=== End of Icon Check ===\n');
+  return null;
+}
 
 app.whenReady().then(() => {
+  console.log('App starting...');
+  
+  // Check icon files first
+  checkIconFiles();
+  
+  // Create the application menu
+  createApplicationMenu();
+  
+  // Create the window (hidden by default)
   createWindow();
   
-  // Check for updates after a short delay to ensure the app is fully loaded
-  setTimeout(checkForUpdates, 10000); // 10 seconds delay
+  // Create the system tray with the valid icon if available
+  createSystemTray();
   
-  // Set up periodic checks (every 4 hours)
-  setInterval(checkForUpdates, 4 * 60 * 60 * 1000);
+  // Set up other handlers
+  setupTeamViewerHandler();
+  setupAutoUpdater();
+  
+  // Set up auto-start on Windows
+  if (PLATFORM_CONFIG.isWindows) {
+    enableAutoStart().then(enabled => {
+      if (!enabled) {
+        console.warn('Could not configure auto-start on Windows');
+      }
+    });
+  }
+  
+  // Initial update check after a short delay
+  setTimeout(() => {
+    checkForUpdates();
+  }, 5000);
+  
+  console.log('App initialization complete');
+}).catch(error => {
+  console.error('Error during app initialization:', error);
 });
+
+// Update window and auto-start behavior to show window on startup and ensure proper auto-start configuration
+async function enableAutoStart() {
+  if (!PLATFORM_CONFIG.isWindows) return;
+  
+  try {
+    const appPath = app.getPath('exe');
+    const appName = 'DBS Support Desk';
+    
+    // Create a batch file to launch the app
+    const batchContent = `@echo off
+start "" "${appPath.replace(/\\/g, '\\\\')}" --minimized`;
+    
+    const batchPath = path.join(app.getPath('userData'), 'dbs_support_desk_startup.bat');
+    fs.writeFileSync(batchPath, batchContent, 'utf8');
+    
+    // Add to Windows startup
+    const regKey = `REG ADD "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run" /v "${appName}" /t REG_SZ /d "${batchPath.replace(/\\/g, '\\\\')}" /f`;
+    require('child_process').execSync(regKey);
+    
+    console.log('Auto-start configured successfully');
+    return true;
+  } catch (error) {
+    console.error('Error configuring auto-start:', error);
+    return false;
+  }
+}
