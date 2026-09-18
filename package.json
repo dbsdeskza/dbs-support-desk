@@ -1,6 +1,6 @@
 {
   "name": "dbs-support-desk",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "DBS Support Desk Widget",
   "main": "main.js",
   "scripts": {
@@ -41,7 +41,9 @@
       "!**/._*",
       "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
       "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}",
-      "!**/{appveyor.yml,.travis.yml,circle.yml,.vscode}"
+      "!**/{appveyor.yml,.travis.yml,circle.yml,.vscode}",
+      "!.env*",
+      "!fns-support-desk.git/**"
     ],
     "win": {
       "target": [
@@ -172,6 +174,7 @@
     "electron-dl": "^3.0.0",
     "electron-log": "^5.0.0",
     "electron-updater": "^6.1.1",
+    "nodemailer": "6.10.1",
     "systeminformation": "^5.11.22",
     "tweetnacl": "^1.0.3"
   },
