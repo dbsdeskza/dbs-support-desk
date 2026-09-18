@@ -1977,14 +1977,181 @@ async function checkAppDirectoryAccess() {
   }
 }
 
-async function checkForUpdates(manualCheck = false) {
-  // Auto-update is not supported for unsigned macOS builds
-  if (PLATFORM_CONFIG.isMac) {
-    log.info('Skipping update check - auto-update not supported on unsigned macOS builds');
-    if (manualCheck && mainWindow) {
-      mainWindow.webContents.send('update-not-available', { version: app.getVersion() });
-    }
+// ===== Custom macOS updater for unsigned builds =====
+// electron-updater's macOS backend requires a signed app (Squirrel verifies
+// signatures), so unsigned builds can't use it. Instead we fetch
+// latest-mac.yml from the latest GitHub release, download the arch-matched
+// zip, swap the .app bundle in place, strip quarantine, and relaunch.
+// Uses the same renderer events as the Windows updater.
+
+const MAC_UPDATE_BASE = 'https://github.com/dbsdeskza/dbs-support-desk/releases';
+let pendingMacUpdate = null;       // { version, zipUrl, sha512, size }
+let downloadedMacUpdateZip = null;
+
+function httpGetBuffer(url, redirects = 5) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'DBS-Support-Desk' } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        if (redirects <= 0) return reject(new Error('Too many redirects'));
+        return resolve(httpGetBuffer(res.headers.location, redirects - 1));
+      }
+      if (res.statusCode !== 200) {
+        res.resume();
+        return reject(new Error(`HTTP ${res.statusCode} fetching ${url}`));
+      }
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+      res.on('error', reject);
+    }).on('error', reject);
+  });
+}
+
+function httpDownloadFile(url, dest, onProgress, redirects = 5) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'DBS-Support-Desk' } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        if (redirects <= 0) return reject(new Error('Too many redirects'));
+        return resolve(httpDownloadFile(res.headers.location, dest, onProgress, redirects - 1));
+      }
+      if (res.statusCode !== 200) {
+        res.resume();
+        return reject(new Error(`HTTP ${res.statusCode} downloading ${url}`));
+      }
+      const total = parseInt(res.headers['content-length'] || '0', 10);
+      let received = 0;
+      const file = fs.createWriteStream(dest);
+      res.on('data', (chunk) => {
+        received += chunk.length;
+        if (onProgress) onProgress(received, total);
+      });
+      res.pipe(file);
+      file.on('finish', () => file.close(() => resolve(dest)));
+      file.on('error', reject);
+      res.on('error', reject);
+    }).on('error', reject);
+  });
+}
+
+function isNewerVersion(latest, current) {
+  const a = String(latest).split('.').map(Number);
+  const b = String(current).split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] || 0) > (b[i] || 0)) return true;
+    if ((a[i] || 0) < (b[i] || 0)) return false;
+  }
+  return false;
+}
+
+async function checkMacUpdate(manualCheck = false) {
+  const send = (ch, data) => { if (mainWindow) mainWindow.webContents.send(ch, data); };
+  if (!app.isPackaged) {
+    log.info('Skipping mac update check - running in dev mode');
+    if (manualCheck) send('update-not-available', { version: app.getVersion() });
     return null;
+  }
+  try {
+    send('update-status', 'Checking for updates...');
+    const yml = (await httpGetBuffer(`${MAC_UPDATE_BASE}/latest/download/latest-mac.yml`)).toString();
+    const version = (yml.match(/^version:\s*(\S+)/m) || [])[1];
+    const files = [];
+    const fileRe = /-\s*url:\s*(\S+)\s*\n\s*sha512:\s*(\S+)\s*\n\s*size:\s*(\d+)/g;
+    let m;
+    while ((m = fileRe.exec(yml))) files.push({ url: m[1], sha512: m[2], size: +m[3] });
+
+    if (!version || !files.length) throw new Error('Invalid latest-mac.yml');
+    log.info(`Latest mac release: v${version} (current: ${app.getVersion()})`);
+
+    if (!isNewerVersion(version, app.getVersion())) {
+      send('update-not-available', { version });
+      return null;
+    }
+
+    const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+    const zipFile = files.find(f => f.url.endsWith(`${arch}.zip`));
+    if (!zipFile) throw new Error(`No ${arch} zip asset in latest release`);
+
+    pendingMacUpdate = {
+      version,
+      zipUrl: `${MAC_UPDATE_BASE}/download/v${version}/${zipFile.url}`,
+      sha512: zipFile.sha512,
+      size: zipFile.size
+    };
+    send('update-available', { version });
+    return pendingMacUpdate;
+  } catch (e) {
+    log.error('Mac update check failed:', e);
+    if (manualCheck) send('update-error', `Update check failed: ${e.message}`);
+    return null;
+  }
+}
+
+async function downloadMacUpdate(update) {
+  const send = (ch, data) => { if (mainWindow) mainWindow.webContents.send(ch, data); };
+  const updateDir = path.join(app.getPath('userData'), 'updates');
+  fs.mkdirSync(updateDir, { recursive: true });
+  const zipPath = path.join(updateDir, `dbs-support-desk-${update.version}.zip`);
+
+  await httpDownloadFile(update.zipUrl, zipPath, (received, total) => {
+    send('download-progress', {
+      percent: total ? (received / total) * 100 : 0,
+      transferred: received,
+      total: total || update.size
+    });
+  });
+
+  // Verify sha512 integrity against latest-mac.yml
+  const hash = crypto.createHash('sha512').update(fs.readFileSync(zipPath)).digest('base64');
+  if (hash !== update.sha512) {
+    fs.unlinkSync(zipPath);
+    throw new Error('Update download failed integrity check');
+  }
+  return zipPath;
+}
+
+async function installMacUpdate(zipPath) {
+  const updateDir = path.dirname(zipPath);
+  const extractDir = path.join(updateDir, 'extracted');
+  fs.rmSync(extractDir, { recursive: true, force: true });
+  fs.mkdirSync(extractDir, { recursive: true });
+  await execAsync(`ditto -x -k "${zipPath}" "${extractDir}"`);
+
+  const appName = fs.readdirSync(extractDir).find(f => f.endsWith('.app'));
+  if (!appName) throw new Error('No .app bundle found in update package');
+  const newApp = path.join(extractDir, appName);
+
+  // Bundle path of the running app: .../X.app/Contents/MacOS/exe → up 3
+  const currentApp = path.resolve(path.dirname(app.getPath('exe')), '..', '..');
+  if (!currentApp.endsWith('.app')) {
+    throw new Error('Cannot determine current .app bundle path');
+  }
+  fs.accessSync(path.dirname(currentApp), fs.constants.W_OK);
+
+  // Move the running bundle aside (allowed on APFS while running), copy the
+  // new one into place, roll back on failure
+  const backupApp = `${currentApp}.old`;
+  fs.rmSync(backupApp, { recursive: true, force: true });
+  fs.renameSync(currentApp, backupApp);
+  try {
+    await execAsync(`ditto "${newApp}" "${currentApp}"`);
+  } catch (e) {
+    fs.renameSync(backupApp, currentApp);
+    throw e;
+  }
+  await execAsync(`xattr -dr com.apple.quarantine "${currentApp}"`).catch(() => {});
+  fs.rmSync(backupApp, { recursive: true, force: true });
+  fs.rmSync(updateDir, { recursive: true, force: true });
+
+  log.info('Mac update installed, relaunching...');
+  app.relaunch();
+  app.exit(0);
+}
+
+async function checkForUpdates(manualCheck = false) {
+  if (PLATFORM_CONFIG.isMac) {
+    return checkMacUpdate(manualCheck);
   }
   try {
     log.info('Checking for updates...');
@@ -2030,7 +2197,13 @@ async function checkForUpdates(manualCheck = false) {
 // Configure auto-updater
 function setupAutoUpdater() {
   if (PLATFORM_CONFIG.isMac) {
-    log.info('Auto-updater disabled on macOS (unsigned builds)');
+    // Custom unsigned-build updater: check on start and every 4 hours
+    log.info('Setting up custom macOS updater (unsigned build)...');
+    setTimeout(() => {
+      log.info('Performing initial update check...');
+      checkMacUpdate();
+    }, 3000);
+    setInterval(() => checkMacUpdate(), 4 * 60 * 60 * 1000);
     return;
   }
   log.info('Setting up auto-updater...');
@@ -2120,7 +2293,25 @@ ipcMain.on('check-for-updates', () => {
 ipcMain.handle('download-and-install-update', async () => {
   try {
     if (PLATFORM_CONFIG.isMac) {
-      return { success: false, error: 'Auto-update is not supported on macOS unsigned builds' };
+      // Custom unsigned-build update: download → verify → swap .app → relaunch
+      if (downloadedMacUpdateZip) {
+        log.info('Mac update already downloaded, installing...');
+        if (mainWindow) mainWindow.webContents.send('update-downloaded', {});
+        await installMacUpdate(downloadedMacUpdateZip);
+        return { success: true };
+      }
+      if (!pendingMacUpdate) {
+        await checkMacUpdate(true);
+      }
+      if (!pendingMacUpdate) {
+        return { success: false, error: 'No update available' };
+      }
+      log.info(`Downloading mac update v${pendingMacUpdate.version}...`);
+      downloadedMacUpdateZip = await downloadMacUpdate(pendingMacUpdate);
+      log.info('Mac update downloaded, installing...');
+      if (mainWindow) mainWindow.webContents.send('update-downloaded', { version: pendingMacUpdate.version });
+      await installMacUpdate(downloadedMacUpdateZip);
+      return { success: true, version: pendingMacUpdate.version };
     }
     log.info('Starting manual update process...');
     

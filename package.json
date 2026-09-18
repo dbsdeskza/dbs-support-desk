@@ -13,17 +13,7 @@
     "build:mac": "electron-builder --mac",
     "dist:mac": "electron-builder --mac -p always",
     "build:all": "electron-builder -mwl",
-    "publish": "electron-builder -p always",
-    "build:dbs": "node build-brand.js dbs && npm run build:win && node verify-config.js dbs",
-    "build:fns": "node build-brand.js fns && npm run build:win && node verify-config.js fns",
-    "start:dbs": "node build-brand.js dbs && npm start",
-    "start:fns": "node build-brand.js fns && npm start",
-    "deploy:dbs": "powershell -ExecutionPolicy Bypass -File deploy.ps1 -Brand dbs",
-    "deploy:fns": "powershell -ExecutionPolicy Bypass -File deploy.ps1 -Brand fns",
-    "deploy:both": "powershell -ExecutionPolicy Bypass -File deploy.ps1 -Brand both",
-    "safe-deploy:dbs": "node safe-deploy.js dbs",
-    "safe-deploy:fns": "node safe-deploy.js fns",
-    "safe-deploy:both": "node safe-deploy.js both"
+    "publish": "electron-builder -p always"
   },
   "build": {
     "appId": "com.dbs.supportdesk",
