@@ -2114,7 +2114,8 @@ async function downloadMacUpdate(update) {
 async function installMacUpdate(zipPath) {
   const updateDir = path.dirname(zipPath);
   const extractDir = path.join(updateDir, 'extracted');
-  fs.rmSync(extractDir, { recursive: true, force: true });
+  // rm -rf, not fs.rmSync — Electron's patched fs treats *.asar as a directory
+  await execAsync(`rm -rf "${extractDir}"`).catch(() => {});
   fs.mkdirSync(extractDir, { recursive: true });
   await execAsync(`ditto -x -k "${zipPath}" "${extractDir}"`);
 
@@ -2130,9 +2131,11 @@ async function installMacUpdate(zipPath) {
   fs.accessSync(path.dirname(currentApp), fs.constants.W_OK);
 
   // Move the running bundle aside (allowed on APFS while running), copy the
-  // new one into place, roll back on failure
+  // new one into place, roll back on failure.
+  // NOTE: never use fs.rmSync on paths containing .asar — Electron patches fs
+  // to treat *.asar as a virtual directory (rmdir → ENOTDIR). Use rm -rf.
   const backupApp = `${currentApp}.old`;
-  fs.rmSync(backupApp, { recursive: true, force: true });
+  await execAsync(`rm -rf "${backupApp}"`).catch(() => {});
   fs.renameSync(currentApp, backupApp);
   try {
     await execAsync(`ditto "${newApp}" "${currentApp}"`);
@@ -2141,8 +2144,8 @@ async function installMacUpdate(zipPath) {
     throw e;
   }
   await execAsync(`xattr -dr com.apple.quarantine "${currentApp}"`).catch(() => {});
-  fs.rmSync(backupApp, { recursive: true, force: true });
-  fs.rmSync(updateDir, { recursive: true, force: true });
+  await execAsync(`rm -rf "${backupApp}" "${updateDir}"`).catch(e =>
+    log.warn('Update cleanup failed (non-fatal):', e.message));
 
   log.info('Mac update installed, relaunching...');
   app.relaunch();
