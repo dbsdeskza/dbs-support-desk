@@ -1674,6 +1674,26 @@ function getRemoteSupportId(exePath) {
   });
 }
 
+// Detect the inner executable name the QS wrapper actually runs as (Windows).
+// Newer QS builds self-extract to %LOCALAPPDATA%\<inner-name> and the wrapper
+// prints `executing <path>\<inner-name>.exe` when invoked. The config TOML and
+// taskkill must target the inner name, not the wrapper file name.
+async function probeRemoteSupportWindowsInnerName(wrapperPath) {
+  const wrapperName = path.basename(wrapperPath).replace(/\.exe$/i, '');
+  return new Promise((resolve) => {
+    exec(`"${wrapperPath}" --get-id`, { timeout: 60000, windowsHide: true }, (error, stdout) => {
+      const m = (stdout || '').match(/executing\s+.*[\\\/]([^\\\/]+)\.exe/i);
+      if (m && m[1]) {
+        console.log(`Remote Support inner executable detected: ${m[1]}`);
+        resolve(m[1]);
+      } else {
+        console.warn(`Could not detect Remote Support inner name, falling back to: ${wrapperName}`);
+        resolve(wrapperName);
+      }
+    });
+  });
+}
+
 // Consolidated Remote Support launch handler
 function setupRemoteSupportHandler() {
   // Prevent multiple initializations
@@ -1720,12 +1740,16 @@ function setupRemoteSupportHandler() {
 
       console.log('File exists, attempting to launch Remote Support...');
 
-      const exeName = path.basename(launchPath).replace(/\.exe$/i, '');
-
       if (password) {
         console.log('Launching with custom password');
         // The QS build rejects --password (disable-settings), so write the
         // permanent password into its config TOML before launching instead.
+        let exeName = path.basename(launchPath).replace(/\.exe$/i, '');
+        if (PLATFORM_CONFIG.isWindows) {
+          // The wrapper runs an inner binary under a different name (e.g.
+          // dbs-remoteassist-win); the config TOML and taskkill must target it.
+          exeName = await probeRemoteSupportWindowsInnerName(launchPath);
+        }
         await stopRemoteSupportIfRunning(exeName);
         const tomlPath = getRemoteSupportConfigTomlPath(exeName);
         try {

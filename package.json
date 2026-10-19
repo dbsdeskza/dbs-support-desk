@@ -1,6 +1,6 @@
 {
   "name": "dbs-support-desk",
-  "version": "2.1.4",
+  "version": "2.1.5",
   "description": "DBS Support Desk Widget",
   "main": "main.js",
   "scripts": {
@@ -43,7 +43,9 @@
       "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}",
       "!**/{appveyor.yml,.travis.yml,circle.yml,.vscode}",
       "!.env*",
-      "!fns-support-desk.git/**"
+      "!fns-support-desk.git/**",
+      "!tools/dbs-utilities/*.dmg",
+      "!tools/dbs-utilities/remote support/**"
     ],
     "win": {
       "target": [
@@ -51,22 +53,14 @@
         "portable"
       ],
       "icon": "assets/DBS_Logo.ico",
-      "extraFiles": [
-        {
-          "from": "node_modules/electron/dist/vcruntime140_1.dll",
-          "to": ".",
-          "filter": [
-            "**/*"
-          ]
-        }
-      ],
       "extraResources": [
         {
           "from": "tools/dbs-utilities",
           "to": "tools/dbs-utilities",
           "filter": [
             "**/*",
-            "!*.dmg"
+            "!*.dmg",
+            "!remote support/**"
           ]
         }
       ],
