@@ -1509,15 +1509,25 @@ function forceRemoteSupportPassword(tomlPath, password) {
   // Reuse existing salt or generate a new 32-char one (RustDesk password charset)
   const saltMatch = content.match(/^salt\s*=\s*'([^']*)'/m);
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
-  const salt = saltMatch ? saltMatch[1]
+  const salt = (saltMatch && saltMatch[1]) ? saltMatch[1]
     : Array.from(crypto.randomBytes(32)).map(b => chars[b % chars.length]).join('');
 
-  // Encryption key: prefer the key_pair pubkey (always works via decrypt fallback)
+  // Encryption key: prefer the key_pair pubkey. Remote Assist 1.5.0 needs a
+  // real key_pair and uses its public half as the secretbox key; generate one
+  // on first-run / empty TOML instead of falling back to the machine UUID.
   let keyBytes = getKeyPairPubkeyFromToml(content);
   if (!keyBytes) {
-    const uid = getMachineUid();
-    if (!uid) throw new Error('Cannot derive QS encryption key (no key_pair or machine UID)');
-    keyBytes = Buffer.from(uid, 'utf8');
+    const kp = nacl.box.keyPair();
+    const keyPairBytes = Buffer.concat([Buffer.from(kp.secretKey), Buffer.from(kp.publicKey)]);
+    const removeKeyPair = (toml) => {
+      let re = /^key_pair\s*=\s*\[[\s\S]*?^\]\s*$/m;
+      if (re.test(toml)) return toml.replace(re, '');
+      re = /^key_pair\s*=\s*\[[^\]]*\]\s*$/m;
+      return toml.replace(re, '');
+    };
+    content = removeKeyPair(content);
+    content = `key_pair = [${Array.from(keyPairBytes).join(', ')}]\n${content}`;
+    keyBytes = kp.publicKey;
   }
   const key = new Uint8Array(32);
   key.set(keyBytes.subarray(0, 32));
