@@ -1,5 +1,7 @@
 # DBS Support Desk — Technician SOP
 
+<img src="assets/DBS_Logo_512.png" width="128" alt="DBS Logo">
+
 **Version:** 2.1.7  
 **Last updated:** 2026-10-28
 
@@ -31,7 +33,7 @@ This SOP is for DBS technicians who support customers using the DBS Support Desk
 - The app is a small support widget for customers.
 - It collects contact details and automatically gathers computer information.
 - It can launch a remote support session and include the Support ID and password in the ticket email.
-- It includes quick system checks through the Toolbox / Utilities section.
+- It includes quick system checks through the DBS Toolbox (Windows only).
 
 ## 5. How an end user logs a ticket
 1. Open **DBS Support Desk** from the Start menu or `Applications`.
@@ -94,16 +96,27 @@ None of this is entered by hand; it is pulled directly from the workstation.
 - When a newer version is available, a dialog prompts the user to download and install it.
 - Ask the customer to accept the update to stay on the latest Remote Assist binaries and fixes.
 
-## 9. Toolbox / quick checks
-Windows builds include quick diagnostics that let you view, without separate tools:
-- System summary
-- Microsoft Office installation
-- Antivirus status
-- CPU, memory, and disk usage
-- Network adapters
-- Battery and graphics information
+## 9. DBS Toolbox (Windows only)
+The DBS Toolbox is opened by clicking the **gear icon** in the top-right corner of the app. It is hidden on macOS because the underlying tools are Windows executables.
 
-Mac builds may have a reduced set depending on what the platform exposes.
+The toolbox launches small built-in utilities from the `tools/dbs-utilities` folder. Each tool opens in its own window. Do not ask the customer to run these unless you are actively troubleshooting the machine.
+
+- **Disk Cleanup** — removes temporary and unnecessary files to free up disk space.
+- **Uninstall Manager** — shows installed programs and lets the customer remove unwanted software.
+- **Startup Manager** — lists programs that start with Windows and lets you enable or disable them.
+- **Memory Optimizer** — attempts to free up system RAM.
+- **Check Disk** — launches a disk health and error check.
+- **Software Update** — scans for available software updates.
+- **Registry Repair** — scans the Windows registry for errors and offers to fix them.
+- **Registry Defrag** — compacts the Windows registry.
+
+All of these tools may require administrator rights. If a tool fails to open, ask the customer to close the app, right-click the DBS Support Desk shortcut, and choose **Run as administrator**.
+
+### Built-in quick checks
+The main app window also shows live summary metrics without opening the toolbox:
+- Disk usage progress bar
+- Memory usage progress bar
+- A full system summary that is included with every support ticket.
 
 ## 10. Troubleshooting basics
 - **Mac app won’t open the first time:** Right-click the app, choose **Open**, and confirm.
@@ -115,3 +128,19 @@ Mac builds may have a reduced set depending on what the platform exposes.
 ## 11. Where to get the latest builds
 - GitHub releases: https://github.com/dbsdeskza/dbs-support-desk/releases
 - Always choose the installer or DMG that matches the customer’s operating system and Mac architecture.
+
+## 12. Visual guide
+To make this SOP easier to follow, add the following screenshots to `assets/sop/` and the document will display them automatically:
+
+- **Main app window:**
+  ![Main app window](assets/sop/main-window.png)
+- **Ticket form filled in:**
+  ![Ticket form](assets/sop/ticket-form.png)
+- **Remote Support launched:**
+  ![Remote support session](assets/sop/remote-support.png)
+- **DBS Toolbox open:**
+  ![DBS Toolbox](assets/sop/toolbox.png)
+- **Update prompt:**
+  ![Update prompt](assets/sop/update-prompt.png)
+
+If you provide the screenshot files, I will embed them here.
