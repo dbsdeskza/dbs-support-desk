@@ -35,6 +35,9 @@ This SOP is for DBS technicians who support customers using the DBS Support Desk
 - It can launch a remote support session and include the Support ID and password in the ticket email.
 - It includes quick system checks through the DBS Toolbox (Windows only).
 
+<img src="assets/sop/main-window.png" width="300" alt="DBS Support Desk main window">
+*Figure 1: DBS Support Desk main window showing system performance and the ticket form.*
+
 ## 5. How an end user logs a ticket
 1. Open **DBS Support Desk** from the Start menu or `Applications`.
 2. Fill in the form:
@@ -78,11 +81,17 @@ None of this is entered by hand; it is pulled directly from the workstation.
 3. It waits a few seconds for the client to register, then reads the Support ID.
 4. The Support ID and password are added to the ticket email that is sent to the support desk.
 
+<img src="assets/sop/remote-support-prompt.png" width="300" alt="Remote support consent prompt">
+*Figure 3: Prompt asking the customer to confirm launching remote support.*
+
 ### How the technician connects
 - Open your Remote Assist client.
 - Enter the **Support ID** from the ticket.
 - Enter the **Password** from the ticket email.
 - **Important:** Use the password in the ticket email, not the one shown inside the customer’s Remote Assist window.
+
+<img src="assets/sop/remote-support.png" width="300" alt="Remote Assist client with Support ID">
+*Figure 4: Remote Assist client open with the Support ID and the ticket submitted confirmation.*
 
 ### Phone/screen-share guidance script
 - “Click the DBS Support Desk icon in your Start menu or Applications folder.”
@@ -95,6 +104,9 @@ None of this is entered by hand; it is pulled directly from the workstation.
 - Windows clients use `latest.yml`; Mac clients use `latest-mac.yml`.
 - When a newer version is available, a dialog prompts the user to download and install it.
 - Ask the customer to accept the update to stay on the latest Remote Assist binaries and fixes.
+
+<img src="assets/sop/update-prompt.png" width="300" alt="Update available prompt">
+*Figure 2: Update prompt shown when a new version is available.*
 
 ## 9. DBS Toolbox (Windows only)
 The DBS Toolbox is opened by clicking the **gear icon** in the top-right corner of the app. It is hidden on macOS because the underlying tools are Windows executables.
@@ -111,6 +123,9 @@ The toolbox launches small built-in utilities from the `tools/dbs-utilities` fol
 - **Registry Defrag** — compacts the Windows registry.
 
 All of these tools may require administrator rights. If a tool fails to open, ask the customer to close the app, right-click the DBS Support Desk shortcut, and choose **Run as administrator**.
+
+<img src="assets/sop/toolbox.png" width="300" alt="DBS Toolbox">
+*Figure 5: DBS Toolbox with the eight built-in Windows utilities.*
 
 ### Built-in quick checks
 The main app window also shows live summary metrics without opening the toolbox:
@@ -129,18 +144,11 @@ The main app window also shows live summary metrics without opening the toolbox:
 - GitHub releases: https://github.com/dbsdeskza/dbs-support-desk/releases
 - Always choose the installer or DMG that matches the customer’s operating system and Mac architecture.
 
-## 12. Visual guide
-To make this SOP easier to follow, add the following screenshots to `assets/sop/` and the document will display them automatically:
-
-- **Main app window:**
-  ![Main app window](assets/sop/main-window.png)
-- **Ticket form filled in:**
-  ![Ticket form](assets/sop/ticket-form.png)
-- **Remote Support launched:**
-  ![Remote support session](assets/sop/remote-support.png)
-- **DBS Toolbox open:**
-  ![DBS Toolbox](assets/sop/toolbox.png)
-- **Update prompt:**
-  ![Update prompt](assets/sop/update-prompt.png)
-
-If you provide the screenshot files, I will embed them here.
+## 12. Visual guide reference
+| # | Image | File |
+|---|-------|------|
+| 1 | Main window | `assets/sop/main-window.png` |
+| 2 | Update prompt | `assets/sop/update-prompt.png` |
+| 3 | Remote support consent prompt | `assets/sop/remote-support-prompt.png` |
+| 4 | Remote Assist session + ticket success | `assets/sop/remote-support.png` |
+| 5 | DBS Toolbox | `assets/sop/toolbox.png` |
